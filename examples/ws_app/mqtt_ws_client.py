@@ -1,17 +1,22 @@
-import asyncio
-from asyncio import Queue
+import logging
 from contextlib import contextmanager
-from typing import AsyncGenerator, cast, Generator
+from queue import Empty, Queue
+from threading import Event
+from typing import cast, Generator, Iterator, Optional
 
 from gmqtt import Subscription
-from uvicorn.config import logger
 
-from fastapi_mqtt.fastmqtt import FastMQTT
+from flask_mqtt.flaskmqtt import FlaskMQTT
+
+logger = logging.getLogger(__name__)
+
+#: How often a waiting subscriber checks whether it has been stopped.
+_POLL_INTERVAL = 0.5
 
 
 class DynamicMQTTClient:
     """
-    Wrapper around FastMQTT manager to dynamically subscribe to MQTT topics
+    Wrapper around FlaskMQTT manager to dynamically subscribe to MQTT topics
 
     Supporting multiple persistent connections (like websockets or SSE),
     so the MQTT client is subscribed to a certain topic only when at least
@@ -21,32 +26,45 @@ class DynamicMQTTClient:
     the subscription is shared and all clients are notified on new messages
     that match the subscribed topic.
 
+    The queues are `queue.Queue` instead of `asyncio.Queue`, because they are
+    filled from the MQTT event loop thread and drained from the WSGI worker
+    threads serving the websocket connections.
+
     Inpired by the `MultisubscriberQueue` in
     https://github.com/smithk86/asyncio-multisubscriber-queue
     """
 
-    mqtt: FastMQTT
+    mqtt: FlaskMQTT
     topic_subscriptions: dict[str, set[Queue[str]]]
     _close_sentinel = cast(str, object())
 
     __slots__ = ("mqtt", "topic_subscriptions")
 
-    def __init__(self, mqtt: FastMQTT) -> None:
+    def __init__(self, mqtt: FlaskMQTT) -> None:
         self.mqtt = mqtt
         self.topic_subscriptions = {}
 
-    async def subscribe(
+    def subscribe(
         self,
         topic: str,
         qos: int = 0,
         no_local: bool = False,
         retain_as_published: bool = False,
         retain_handling_options: int = 0,
-    ) -> AsyncGenerator[str, None]:
-        """Async generator to subscribe to MQTT topic and receive messages."""
+        stop: Optional[Event] = None,
+    ) -> Iterator[str]:
+        """
+        Generator to subscribe to MQTT topic and receive messages.
+
+        `stop` is an optional `threading.Event` used to interrupt a subscriber
+        that is blocked waiting for the next message.
+        """
         with self.queue(topic, qos, no_local, retain_as_published, retain_handling_options) as q:
-            while True:
-                _data: str = await q.get()
+            while stop is None or not stop.is_set():
+                try:
+                    _data: str = q.get(timeout=_POLL_INTERVAL)
+                except Empty:
+                    continue
                 if _data is self._close_sentinel:
                     break
                 yield _data
@@ -74,7 +92,7 @@ class DynamicMQTTClient:
                 retain_handling_options,
             )
             logger.warning("Subscribing to %s -> %s", subscription.topic, subscription)
-            self.mqtt.client.subscribe(subscription)
+            self.mqtt.run_on_mqtt_loop(self.mqtt.client.subscribe, subscription)
         try:
             yield _queue
         finally:
@@ -82,29 +100,20 @@ class DynamicMQTTClient:
             if not self.topic_subscriptions[topic]:
                 self.topic_subscriptions.pop(topic)
                 logger.warning("UnSubscribing from %s", topic)
-                self.mqtt.client.unsubscribe(topic)
+                self.mqtt.unsubscribe(topic)
 
-    async def send_mqtt_msg(self, mqtt: FastMQTT, topic: str, msg_payload: str) -> int:
+    def send_mqtt_msg(self, mqtt: FlaskMQTT, topic: str, msg_payload: str) -> int:
         """Put data on all the Queues matching the topic."""
-        tasks = []
+        num_sent = 0
         for topic_listen, queues in self.topic_subscriptions.items():
             if mqtt.match(topic, topic_listen):
-                tasks.extend(
-                    [
-                        _queue.put(f"Msg received in topic '{topic}':\n{msg_payload}")
-                        for _queue in queues
-                    ]
-                )
-        if tasks:
-            await asyncio.gather(*tasks)
-        return len(tasks)
+                for _queue in queues:
+                    _queue.put(f"Msg received in topic '{topic}':\n{msg_payload}")
+                    num_sent += 1
+        return num_sent
 
-    async def close(self) -> None:
+    def close(self) -> None:
         """Put the close sentinel on all the Queues to signal session end."""
-        await asyncio.gather(
-            *[
+        for queues in self.topic_subscriptions.values():
+            for _queue in queues:
                 _queue.put(self._close_sentinel)
-                for queues in self.topic_subscriptions.values()
-                for _queue in queues
-            ]
-        )

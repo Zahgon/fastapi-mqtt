@@ -1,6 +1,6 @@
 import pytest
 
-from fastapi_mqtt.fastmqtt import FastMQTT
+from flask_mqtt.flaskmqtt import FlaskMQTT
 
 
 @pytest.mark.parametrize(
@@ -47,4 +47,4 @@ from fastapi_mqtt.fastmqtt import FastMQTT
     ],
 )
 def test_matching(topic: str, pattern: str, match: bool) -> None:
-    assert match == FastMQTT.match(topic=topic, template=pattern)
+    assert match == FlaskMQTT.match(topic=topic, template=pattern)

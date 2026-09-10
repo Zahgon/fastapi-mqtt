@@ -1,7 +1,7 @@
 from gmqtt import Client as MQTTClient
 
-from fastapi_mqtt.config import MQTTConfig
-from fastapi_mqtt.fastmqtt import FastMQTT
+from flask_mqtt.config import MQTTConfig
+from flask_mqtt.flaskmqtt import FlaskMQTT
 
 __author__ = "Sabuhi Shukurov"
 
@@ -15,4 +15,4 @@ __credits__ = [
     "Jeremy T. Hetzel",
 ]
 
-__all__ = ["FastMQTT", "MQTTConfig", "MQTTClient"]
+__all__ = ["FlaskMQTT", "MQTTConfig", "MQTTClient"]

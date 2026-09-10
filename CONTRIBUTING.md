@@ -1,12 +1,12 @@
-# Contributing to fastapi-mqtt
+# Contributing to flask-mqtt
 
-We welcome contributions to [fastapi-mqtt](https://github.com/sabuhish/fastapi-mqtt)
+We welcome contributions to [flask-mqtt](https://github.com/sabuhish/flask-mqtt)
 
 ## Issues
 
 Feel free to submit issues and enhancement requests.
 
-[Fastapi-MQTT Issues](https://github.com/sabuhish/fastapi-mqtt/issues)
+[Flask-MQTT Issues](https://github.com/sabuhish/flask-mqtt/issues)
 
 ## Contributing
 
@@ -21,8 +21,8 @@ Please refer to each project's style and contribution guidelines for submitting 
 ## Before contributing, here is how to install
 
 ```sh
-git clone https://github.com/sabuhish/fastapi-mqtt.git
-cd fastapi-mqtt
+git clone https://github.com/sabuhish/flask-mqtt.git
+cd flask-mqtt
 poetry install
 # activate the poetry virtualenv
 poetry shell
@@ -34,10 +34,10 @@ pre-commit run --all-files
 pytest
 ```
 
-Explore the fastapi app **examples** and run them with uvicorn
+Explore the Flask app **examples** and run them with the `flask` CLI
 
 ```sh
-uvicorn examples.app:app --port 8000 --reload
+flask --app examples.app run --port 8000
 ```
 
 NOTE: Be sure to merge the latest from "upstream" before making a pull request!

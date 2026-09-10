@@ -1,4 +1,4 @@
-name: Run CI linter and pytest on FastApi-MQTT Package
+name: Run CI linter and pytest on Flask-MQTT Package
 
 on: [push, pull_request]
 

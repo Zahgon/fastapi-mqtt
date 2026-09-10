@@ -1,19 +1,11 @@
-from typing import Annotated
-
-from fastapi import APIRouter, Depends, Request, WebSocket
+from flask import current_app
 
 from .mqtt_ws_client import DynamicMQTTClient
 
-mqtt_router = APIRouter()
+#: Key used to register the websocket subscribers manager on the Flask app.
+WS_SUBSCRIBERS_KEY = "ws_subscribers"
 
 
-async def _get_ws_subscribers(request: Request) -> DynamicMQTTClient:
-    return request.app.state.ws_subscribers
-
-
-async def _get_ws_subscribers_from_ws(websocket: WebSocket) -> DynamicMQTTClient:
-    return websocket.app.state.ws_subscribers
-
-
-Clients = Annotated[DynamicMQTTClient, Depends(_get_ws_subscribers)]
-WSClients = Annotated[DynamicMQTTClient, Depends(_get_ws_subscribers_from_ws)]
+def get_ws_subscribers() -> DynamicMQTTClient:
+    """Access the websocket subscribers manager stored in the current Flask app."""
+    return current_app.extensions[WS_SUBSCRIBERS_KEY]

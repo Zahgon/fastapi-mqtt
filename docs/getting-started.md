@@ -1,20 +1,23 @@
 ### 🕹 Guide
 
-After installing the module you setup your `FastApi` app:
+After installing the module you setup your `Flask` app:
 
-The main classes are `FastMQTT` and `MQTTConfig`
+The main classes are `FlaskMQTT` and `MQTTConfig`
 
 ```python
-from fastapi import FastAPI
-from fastapi_mqtt import FastMQTT, MQTTConfig
+from flask import Flask
+from flask_mqtt import FlaskMQTT, MQTTConfig
 
-app = FastAPI()
+app = Flask(__name__)
 
 mqtt_config = MQTTConfig()
 
-mqtt = FastMQTT(
+mqtt = FlaskMQTT(
     config=mqtt_config
 )
+
+# bind the client to the app, once every handler is registered
+mqtt.init_app(app)
 
 ```
 
@@ -53,12 +56,12 @@ The last three parameters are used after the client disconnects abnormally
 - will_message_payload: The payload
 - will_delay_interval: Delay interval
 
-### `FastMQTT` client
+### `FlaskMQTT` client
 
 сlient sets connection parameters before connecting and manipulating the MQTT service.
 The object holds session information necessary to connect the MQTT broker.
 
-### `FastMQTT` params
+### `FlaskMQTT` params
 
 client has the following parameters. The class object holds session information necessary to connect the MQTT broker.
 
@@ -75,3 +78,22 @@ client has the following parameters. The class object holds session information 
   The client_id identifies the session.
 
 - optimistic_acknowledgement
+
+- mqtt_logger: Optional `logging.Logger` to use. When it is not given and the client
+  is bound with `init_app`, the Flask `app.logger` is used.
+
+- operation_timeout: Seconds a synchronous call blocks waiting for the MQTT event loop.
+
+### Connecting the client
+
+Flask is a synchronous WSGI framework, while `gmqtt` is asyncio based, so `FlaskMQTT`
+runs its own asyncio event loop in a background daemon thread. Calls made from a view,
+like `publish` or `unsubscribe`, are marshalled onto that loop.
+
+`init_app(app)` registers the client in `app.extensions["mqtt"]`, connects it and
+disconnects it when the interpreter exits. It has to be called **after** all the
+`subscribe` / `on_message` handlers are registered, since the subscriptions are sent
+to the broker as soon as the connection is established.
+
+`mqtt_startup()` and `mqtt_shutdown()` are also available to drive the connection
+lifecycle manually.

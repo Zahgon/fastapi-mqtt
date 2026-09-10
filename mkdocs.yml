@@ -1,6 +1,6 @@
-site_name: FastApi-MQTT
+site_name: Flask-MQTT
 site_url:
-site_description: fastapi-mqtt is client for MQTT protocol
+site_description: flask-mqtt is client for MQTT protocol
 dev_addr: 127.0.0.1:8080
 
 theme:
@@ -12,8 +12,8 @@ theme:
 
   icon:
     repo: fontawesome/brands/github
-repo_name: fastapi-mqtt
-repo_url: https://github.com/sabuhish/fastapi-mqtt
+repo_name: flask-mqtt
+repo_url: https://github.com/sabuhish/flask-mqtt
 edit_uri: ""
 
 plugins:
@@ -26,7 +26,7 @@ markdown_extensions:
       permalink: true
 
 nav:
-  - FastApi MQTT: index.md
+  - Flask MQTT: index.md
   - 🔨 Installation: install.md
   - 🕹 Getting Started: getting-started.md
   - Example: example.md

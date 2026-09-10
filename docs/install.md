@@ -5,7 +5,7 @@ python3 -m venv .venv
 
 source .venv/bin/activate
 
-pip install fastapi-mqtt
+pip install flask-mqtt
 ```
 
 Alternatively, if you prefer to use `poetry` for package dependencies:
@@ -13,5 +13,5 @@ Alternatively, if you prefer to use `poetry` for package dependencies:
 ```bash
 poetry shell
 
-poetry add fastapi-mqtt
+poetry add flask-mqtt
 ```

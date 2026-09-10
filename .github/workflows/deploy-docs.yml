@@ -6,7 +6,7 @@ on:
       - master
 jobs:
   deploy:
-    if: github.repository == 'sabuhish/fastapi-mqtt'
+    if: github.repository == 'sabuhish/flask-mqtt'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2

@@ -1,17 +1,15 @@
+import atexit
 import logging
 import os
 from collections import defaultdict
-from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
-import pytest_asyncio
-from async_asgi_testclient import TestClient
-from fastapi import FastAPI
+from flask import Flask
 from gmqtt import Client as MQTTClient
 
-from fastapi_mqtt.config import MQTTConfig
-from fastapi_mqtt.fastmqtt import FastMQTT
+from flask_mqtt.config import MQTTConfig
+from flask_mqtt.flaskmqtt import FlaskMQTT
 
 # Run MQTT broker in background for tests with:
 # `docker run -d -p 9001:9001 -p 1883:1883 eclipse-mosquitto:1.6.15`
@@ -23,7 +21,7 @@ TEST_BROKER_PWD = "secret" if TEST_BROKER_HOST != "test.mosquitto.org" else None
 
 @pytest.fixture
 def test_app():  # noqa: C901
-    """Fixture with example fastAPI app for tests."""
+    """Fixture with example Flask app for tests."""
     mqtt_config = MQTTConfig(
         host=TEST_BROKER_HOST,
         will_message_topic="/WILL",
@@ -32,25 +30,18 @@ def test_app():  # noqa: C901
         username=TEST_BROKER_USER,
         password=TEST_BROKER_PWD,
     )
-    fast_mqtt = FastMQTT(config=mqtt_config)
+    flask_mqtt = FlaskMQTT(config=mqtt_config)
     received_msgs: dict[str, int] = defaultdict(int)
     processed_msgs: dict[str, int] = defaultdict(int)
 
-    @asynccontextmanager
-    async def _lifespan(_application: FastAPI):
-        await fast_mqtt.mqtt_startup()
-        logging.info("connection done, starting fastapi app now")
-        yield
-        await fast_mqtt.mqtt_shutdown()
+    app = Flask(__name__)
 
-    app = FastAPI(lifespan=_lifespan)
-
-    @fast_mqtt.on_connect()
+    @flask_mqtt.on_connect()
     def _connect(client: MQTTClient, flags: int, rc: int, properties: Any):
-        client.subscribe("fastapi-mqtt")  # subscribing mqtt topic
+        client.subscribe("flask-mqtt")  # subscribing mqtt topic
         logging.info("Connected: %s %s %s %s", client, flags, rc, properties)
 
-    @fast_mqtt.subscribe("$share/test/mqtt/+/temperature", "mqtt/+/humidity")
+    @flask_mqtt.subscribe("$share/test/mqtt/+/temperature", "mqtt/+/humidity")
     async def _decorated_subscription(
         client: MQTTClient, topic: str, payload: bytes, qos: int, properties: Any
     ):
@@ -65,7 +56,7 @@ def test_app():  # noqa: C901
         )
         return 0
 
-    @fast_mqtt.subscribe("mqtt/+/humidity", qos=2)
+    @flask_mqtt.subscribe("mqtt/+/humidity", qos=2)
     async def _second_subscription(
         client: MQTTClient, topic: str, payload: bytes, qos: int, properties: Any
     ):
@@ -84,7 +75,7 @@ def test_app():  # noqa: C901
         )
         return 0
 
-    @fast_mqtt.on_message()
+    @flask_mqtt.on_message()
     async def _process_message(
         client: MQTTClient, topic: str, payload: bytes, qos: int, properties: Any
     ):
@@ -99,47 +90,54 @@ def test_app():  # noqa: C901
         )
         return 0
 
-    @fast_mqtt.on_disconnect()
+    @flask_mqtt.on_disconnect()
     def _disconnect(client: MQTTClient, packet, exc=None):
         logging.info("Disconnected")
 
-    @fast_mqtt.on_subscribe()
+    @flask_mqtt.on_subscribe()
     def _subscribe(client: MQTTClient, mid: int, qos: int, properties: Any):
         logging.info("subscribed %s %s %s %s", client, mid, qos, properties)
 
     @app.get("/test-status")
-    async def _get_status():
+    def _get_status():
         return {
             "received_msgs": received_msgs,
             "processed_msgs": processed_msgs,
-            "num_subscriptions": len(fast_mqtt.subscriptions),
+            "num_subscriptions": len(flask_mqtt.subscriptions),
         }
 
     @app.post("/test-publish")
-    async def _pub_msg():
-        fast_mqtt.publish("fastapi-mqtt", "Hello from Fastapi")
-        fast_mqtt.publish("mqtt/test/temperature", "27ºC")
-        fast_mqtt.publish("mqtt/test/humidity", "0%")
+    def _pub_msg():
+        flask_mqtt.publish("flask-mqtt", "Hello from Flask")
+        flask_mqtt.publish("mqtt/test/temperature", "27ºC")
+        flask_mqtt.publish("mqtt/test/humidity", "0%")
         return {"result": True, "message": "Published"}
 
     @app.post("/test-unsubscribe")
-    async def _unsub():
-        fast_mqtt.unsubscribe("fastapi-mqtt")
-        fast_mqtt.unsubscribe("$share/test/mqtt/+/temperature")
+    def _unsub():
+        flask_mqtt.unsubscribe("flask-mqtt")
+        flask_mqtt.unsubscribe("$share/test/mqtt/+/temperature")
         return {"result": True, "message": "Unsubscribed"}
 
     @app.post("/test-reset")
-    async def _reset_msgs():
-        fast_mqtt.publish("fastapi-mqtt")
-        fast_mqtt.publish("mqtt/test/humidity")
-        fast_mqtt.publish("mqtt/test/temperature")
+    def _reset_msgs():
+        flask_mqtt.publish("flask-mqtt")
+        flask_mqtt.publish("mqtt/test/humidity")
+        flask_mqtt.publish("mqtt/test/temperature")
         return {"result": True, "message": "Cleaned"}
 
-    return app
+    # connects the MQTT client and registers it in `app.extensions`
+    flask_mqtt.init_app(app)
+    logging.info("connection done, starting flask app now")
+    try:
+        yield app
+    finally:
+        atexit.unregister(flask_mqtt.mqtt_shutdown)
+        flask_mqtt.mqtt_shutdown()
 
 
-@pytest_asyncio.fixture
-async def app_client(test_app):
-    """FastApi TestClient with example app."""
-    async with TestClient(test_app) as tc:
+@pytest.fixture
+def app_client(test_app):
+    """Flask test client with example app."""
+    with test_app.test_client() as tc:
         yield tc

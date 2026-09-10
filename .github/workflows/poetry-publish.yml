@@ -1,4 +1,4 @@
-name: Upload FastApi-MQTT Package
+name: Upload Flask-MQTT Package
 
 on:
   release:
@@ -6,7 +6,7 @@ on:
 
 jobs:
   release:
-    if: github.repository == 'sabuhish/fastapi-mqtt'
+    if: github.repository == 'sabuhish/flask-mqtt'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3

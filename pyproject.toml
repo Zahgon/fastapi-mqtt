@@ -1,13 +1,14 @@
 [tool.poetry]
-name = "fastapi-mqtt"
+name = "flask-mqtt"
 version = "2.2.0"
-description = "fastapi-mqtt is extension for MQTT protocol"
+description = "flask-mqtt is extension for MQTT protocol"
 authors = ["sabuhish <sabuhi.shukurov@gmail.com>"]
 license = "MIT"
 readme = "README.md"
-homepage = "https://github.com/sabuhish/fastapi-mqtt"
-repository = "https://github.com/sabuhish/fastapi-mqtt"
+homepage = "https://github.com/sabuhish/flask-mqtt"
+repository = "https://github.com/sabuhish/flask-mqtt"
 classifiers = [
+    "Framework :: Flask",
     "Intended Audience :: Developers",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
@@ -27,12 +28,10 @@ pydantic = ">=2.3.0"
 
 [tool.poetry.dev-dependencies]
 pre-commit = ">=2.9.2,<3"
-fastapi = ">=0.103"
-uvicorn = ">=0.19.0"
+flask = ">=3.0"
+flask-sock = ">=0.7.0"
 pytest = ">=7.0.0"
 pytest-cov = ">=3.0.0"
-pytest-asyncio = ">=0.16.0"
-async-asgi-testclient = ">=1.4.11"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
@@ -47,7 +46,7 @@ line-length = 100
 select = ["A", "ASYNC", "B", "BLE", "C", "C4", "E", "F", "FA", "I", "INT", "N", "PIE", "PTH", "RUF", "SIM", "TCH", "W", "YTT"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["fastapi_mqtt"]
+known-first-party = ["flask_mqtt"]
 order-by-type = false
 
 [tool.mypy]
@@ -68,8 +67,7 @@ warn_required_dynamic_aliases = true
 
 [tool.pytest.ini_options]
 minversion = 7.0
-asyncio_mode = "auto"
-addopts = "--cov fastapi_mqtt --cov-report term --cov-report html"
+addopts = "--cov flask_mqtt --cov-report term --cov-report html"
 testpaths = "tests"
 log_cli = true
 

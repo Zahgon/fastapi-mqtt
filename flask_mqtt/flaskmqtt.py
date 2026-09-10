@@ -1,8 +1,12 @@
 import asyncio
+import atexit
 import logging
+import signal
+import threading
 import uuid
 from itertools import zip_longest
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from threading import Event, Thread
+from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from gmqtt import Client as MQTTClient
 from gmqtt import Message, Subscription
@@ -17,16 +21,50 @@ from .handlers import (
     MQTTSubscriptionHandler,
 )
 
-try:
-    from uvicorn.config import logger as log_info
-except ImportError:
-    log_info = logging.getLogger()
+if TYPE_CHECKING:  # pragma: no cover
+    from flask import Flask
+
+log_info = logging.getLogger("flask_mqtt")
+
+#: Seconds a synchronous call may wait for the MQTT event loop to answer.
+DEFAULT_OPERATION_TIMEOUT = 30.0
 
 
-class FastMQTT:
+async def _call_on_loop(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Trivial coroutine used to run a blocking-free gmqtt call inside the MQTT loop."""
+    return func(*args, **kwargs)
+
+
+def _exit_on_sigterm() -> None:
     """
-    FastMQTT client sets connection parameters before connecting and manipulating the MQTT service.
+    Make SIGTERM exit through the interpreter's normal shutdown, so `atexit` runs.
+
+    ASGI servers turned SIGTERM into their lifespan shutdown. WSGI servers such as the
+    Werkzeug development server leave it at its default disposition, which kills the
+    process outright: `mqtt_shutdown` never runs, and the broker publishes the last-will
+    message on every normal stop. Only installed from the main thread, and only when
+    nothing else (e.g. gunicorn) handles SIGTERM already.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        return
+    if signal.getsignal(signal.SIGTERM) is not signal.SIG_DFL:
+        return
+
+    def _terminate(_signum: int, _frame: Any) -> None:
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _terminate)
+
+
+class FlaskMQTT:
+    """
+    FlaskMQTT client sets connection parameters before connecting and manipulating the MQTT service.
     The object holds session information necessary to connect the MQTT broker.
+
+    Flask is a synchronous WSGI framework while `gmqtt` is asyncio based, so this
+    extension owns a private asyncio event loop running in a background daemon
+    thread. Every MQTT operation issued from a Flask view (which runs in a WSGI
+    worker thread) is marshalled onto that loop in a thread-safe way.
 
     config: MQTTConfig config object
 
@@ -42,7 +80,10 @@ class FastMQTT:
 
     optimistic_acknowledgement:  #TODO more info needed
 
-    mqtt_logger: Optional logging.Logger to use.
+    mqtt_logger: Optional logging.Logger to use. When it is not given and the client
+        is bound to an application with `init_app`, the Flask `app.logger` is used.
+
+    operation_timeout: Seconds a synchronous call blocks waiting for the MQTT loop.
     """
 
     def __init__(
@@ -53,12 +94,14 @@ class FastMQTT:
         clean_session: bool = True,
         optimistic_acknowledgement: bool = True,
         mqtt_logger: Optional[logging.Logger] = None,
+        operation_timeout: float = DEFAULT_OPERATION_TIMEOUT,
         **kwargs: Any,
     ) -> None:
         if not client_id:
             client_id = uuid.uuid4().hex
 
-        self.client: MQTTClient = MQTTClient(client_id, **kwargs)
+        self._next_loop: Optional[asyncio.AbstractEventLoop] = None
+        self.client: MQTTClient = self._build_client(client_id, **kwargs)
         self.config: MQTTConfig = config
 
         self.client._clean_session = clean_session
@@ -73,7 +116,11 @@ class FastMQTT:
         self.client.on_message = self.__on_message
         self.client.on_connect = self.__on_connect
         self.subscriptions: Dict[str, Tuple[Subscription, List[MQTTMessageHandler]]] = {}
+        self._mqtt_logger = mqtt_logger
         self._logger = mqtt_logger or log_info
+        self._operation_timeout = operation_timeout
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop_thread: Optional[Thread] = None
         self.mqtt_handlers = MQTTHandlers(self.client, self._logger)
 
         if (
@@ -187,6 +234,101 @@ class FastMQTT:
 
         return await asyncio.gather(*gather)
 
+    def _build_client(self, client_id: str, **kwargs: Any) -> MQTTClient:
+        """
+        Build the gmqtt client on the event loop `mqtt_startup()` is going to run.
+
+        gmqtt schedules its QoS 1/2 re-delivery task on the current event loop as soon
+        as the client is built. Built from plain synchronous code there is no such loop:
+        the task would be bound to a loop that never runs, so unacknowledged messages
+        would never be re-delivered (and Python 3.14+ refuses to build the client at all).
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+
+            async def _build() -> MQTTClient:
+                return MQTTClient(client_id, **kwargs)
+
+            client = loop.run_until_complete(_build())
+            self._next_loop = loop
+            return client
+        # Built from inside a running loop: gmqtt binds its task to that loop.
+        return MQTTClient(client_id, **kwargs)
+
+    def _start_loop(self) -> asyncio.AbstractEventLoop:
+        """Spawn the daemon thread that runs the private asyncio loop used by gmqtt."""
+        # The first start runs the loop the client was built on (see `_build_client`).
+        loop, self._next_loop = self._next_loop, None
+        if loop is None or loop.is_closed():
+            loop = asyncio.new_event_loop()
+        running = Event()
+
+        def _run_loop() -> None:
+            asyncio.set_event_loop(loop)
+            loop.call_soon(running.set)
+            loop.run_forever()
+
+        thread = Thread(target=_run_loop, name="flask-mqtt", daemon=True)
+        thread.start()
+        if not running.wait(self._operation_timeout):  # pragma: no cover
+            raise RuntimeError("MQTT event loop did not start")
+
+        self._loop = loop
+        self._loop_thread = thread
+        self._logger.debug("MQTT event loop started")
+        return loop
+
+    def _stop_loop(self) -> None:
+        """Cancel anything left pending, stop the loop and join its thread."""
+        loop, thread = self._loop, self._loop_thread
+        self._loop, self._loop_thread = None, None
+        if loop is None or thread is None:  # pragma: no cover
+            return
+
+        def _cancel_pending() -> None:
+            for task in asyncio.all_tasks(loop):
+                task.cancel()
+            loop.stop()
+
+        loop.call_soon_threadsafe(_cancel_pending)
+        thread.join(self._operation_timeout)
+        loop.close()
+        self._logger.debug("MQTT event loop stopped")
+
+    def run_on_mqtt_loop(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """
+        Run a synchronous gmqtt call inside the MQTT event loop and return its result.
+
+        gmqtt writes to an asyncio transport and schedules tasks, so its methods
+        must not be called from a WSGI worker thread directly. Use this helper to
+        reach `self.client` from a Flask view, e.g.::
+
+            mqtt.run_on_mqtt_loop(mqtt.client.subscribe, Subscription("some/topic"))
+
+        When it is called from the MQTT loop itself, e.g. inside a message handler,
+        `func` is invoked inline instead, since waiting on the loop from the loop
+        would deadlock.
+
+        Before `mqtt_startup()` (or after `mqtt_shutdown()`) no loop runs, so `func`
+        is called directly, as it always was: e.g. publishing before connecting
+        fails inside gmqtt itself, which has no connection yet.
+        """
+        loop = self._loop
+        if loop is None or not loop.is_running():
+            return func(*args, **kwargs)
+        try:
+            current_loop: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if current_loop is loop:
+            # Already inside the MQTT loop, e.g. called from a message handler.
+            return func(*args, **kwargs)
+
+        future = asyncio.run_coroutine_threadsafe(_call_on_loop(func, *args, **kwargs), loop)
+        return future.result(self._operation_timeout)
+
     def publish(
         self,
         message_or_topic: str,
@@ -206,8 +348,8 @@ class FastMQTT:
 
         retain:
         """
-        return self.client.publish(
-            message_or_topic, payload=payload, qos=qos, retain=retain, **kwargs
+        return self.run_on_mqtt_loop(
+            self.client.publish, message_or_topic, payload=payload, qos=qos, retain=retain, **kwargs
         )
 
     def unsubscribe(self, topic: str, **kwargs):
@@ -220,26 +362,54 @@ class FastMQTT:
         if topic in self.subscriptions:
             del self.subscriptions[topic]
 
-        return self.client.unsubscribe(topic, **kwargs)
+        return self.run_on_mqtt_loop(self.client.unsubscribe, topic, **kwargs)
 
-    async def mqtt_startup(self) -> None:
-        """Initial connection for MQTT client, for lifespan startup."""
-        await self.connection()
+    def mqtt_startup(self) -> None:
+        """Start the MQTT event loop and connect the client."""
+        if self._loop is not None and self._loop.is_running():
+            self._logger.debug("MQTT client is already started")
+            return
 
-    async def mqtt_shutdown(self) -> None:
-        """Final disconnection for MQTT client, for lifespan shutdown."""
-        await self.client.disconnect()
+        loop = self._start_loop()
+        try:
+            asyncio.run_coroutine_threadsafe(self.connection(), loop).result(
+                self._operation_timeout
+            )
+        except BaseException:
+            self._stop_loop()
+            raise
 
-    def init_app(self, fastapi_app) -> None:  # pragma: no cover
-        """Add startup and shutdown event handlers for app without lifespan."""
+    def mqtt_shutdown(self) -> None:
+        """Disconnect the MQTT client and stop its event loop."""
+        loop = self._loop
+        if loop is None or not loop.is_running():
+            self._logger.debug("MQTT client is already stopped")
+            return
 
-        @fastapi_app.on_event("startup")
-        async def startup() -> None:
-            await self.mqtt_startup()
+        try:
+            asyncio.run_coroutine_threadsafe(self.client.disconnect(), loop).result(
+                self._operation_timeout
+            )
+        finally:
+            self._stop_loop()
 
-        @fastapi_app.on_event("shutdown")
-        async def shutdown() -> None:
-            await self.mqtt_shutdown()
+    def init_app(self, app: "Flask") -> None:
+        """
+        Bind the MQTT client to a Flask application.
+
+        The client is registered in `app.extensions["mqtt"]`, connected right away
+        and disconnected when the interpreter exits. It has to be called once every
+        `subscribe` / `on_message` handler is registered, since the subscriptions
+        are sent to the broker as soon as the connection is established.
+        """
+        app.extensions["mqtt"] = self
+        if self._mqtt_logger is None:
+            self._logger = app.logger
+            self.mqtt_handlers._logger = app.logger
+
+        self.mqtt_startup()
+        atexit.register(self.mqtt_shutdown)
+        _exit_on_sigterm()
 
     def subscribe(
         self,

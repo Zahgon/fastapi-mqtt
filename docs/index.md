@@ -1,22 +1,22 @@
-# FastApi-MQTT
+# Flask-MQTT
 
 ## Extension
 
 MQTT is a lightweight publish/subscribe messaging protocol designed for M2M (machine to machine) telemetry in low bandwidth environments.
-Fastapi-mqtt is the client for working with MQTT.
+Flask-mqtt is the client for working with MQTT.
 
 For more information about MQTT, please refer to here: [MQTT](mqtt.md)
 
-Fatapi-mqtt wraps around [gmqtt](https://github.com/wialon/gmqtt) module. Gmqtt Python async client for MQTT client implementation.
+Flask-mqtt wraps around [gmqtt](https://github.com/wialon/gmqtt) module. Gmqtt Python async client for MQTT client implementation.
 The module has the support of MQTT version 5.0 protocol
 
 ## Badges
 
-[![MIT licensed](https://img.shields.io/github/license/sabuhish/fastapi-mqtt)](https://raw.githubusercontent.com/sabuhish/fastapi-mqtt/master/LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/sabuhish/fastapi-mqtt.svg)](https://github.com/sabuhish/fastapi-mqtt/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/sabuhish/fastapi-mqtt.svg)](https://github.com/sabuhish/fastapi-mqtt/network)
-[![GitHub issues](https://img.shields.io/github/issues-raw/sabuhish/fastapi-mqtt)](https://github.com/sabuhish/fastapi-mqtt/issues)
-[![Downloads](https://pepy.tech/badge/fastapi-mqtt)](https://pepy.tech/project/fastapi-mqtt)
+[![MIT licensed](https://img.shields.io/github/license/sabuhish/flask-mqtt)](https://raw.githubusercontent.com/sabuhish/flask-mqtt/master/LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/sabuhish/flask-mqtt.svg)](https://github.com/sabuhish/flask-mqtt/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/sabuhish/flask-mqtt.svg)](https://github.com/sabuhish/flask-mqtt/network)
+[![GitHub issues](https://img.shields.io/github/issues-raw/sabuhish/flask-mqtt)](https://github.com/sabuhish/flask-mqtt/issues)
+[![Downloads](https://pepy.tech/badge/flask-mqtt)](https://pepy.tech/project/flask-mqtt)
 
 ## Available Features
 

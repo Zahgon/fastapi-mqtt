@@ -1,12 +1,13 @@
-import asyncio
+from threading import Event, Thread
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
-from uvicorn.config import logger
+from flask import Blueprint, current_app, Response
+from flask_sock import Sock
+from simple_websocket import ConnectionClosed
 
-from .dependencies import Clients, WSClients
+from .dependencies import get_ws_subscribers
 
-mqtt_router = APIRouter()
+mqtt_router = Blueprint("mqtt", __name__)
+sock = Sock()
 
 _HTML_WS_MQTT_CLIENT = """<!DOCTYPE html>
 <html>
@@ -43,14 +44,15 @@ _HTML_WS_MQTT_CLIENT = """<!DOCTYPE html>
 
 
 @mqtt_router.get("/home")
-async def _ws_demo_page():
+def _ws_demo_page():
     """Show basic web with websocket connection to subscribe to MQTT topics."""
-    return HTMLResponse(_HTML_WS_MQTT_CLIENT)
+    return Response(_HTML_WS_MQTT_CLIENT, mimetype="text/html")
 
 
 @mqtt_router.get("/ws-subscriptions")
-async def _get_current_clients_subscriptions(ws_subscribers: Clients):
+def _get_current_clients_subscriptions():
     """Return JSON with current state of WS clients."""
+    ws_subscribers = get_ws_subscribers()
     return {
         "topic_subscriptions": list(ws_subscribers.topic_subscriptions.keys()),
         "clients_by_topic": {
@@ -59,29 +61,40 @@ async def _get_current_clients_subscriptions(ws_subscribers: Clients):
     }
 
 
-@mqtt_router.websocket("/ws-mqtt-client")
-async def websocket_endpoint(websocket: WebSocket, ws_subscribers: WSClients):
-    await websocket.accept()
+@sock.route("/ws-mqtt-client", bp=mqtt_router)
+def websocket_endpoint(ws):
+    ws_subscribers = get_ws_subscribers()
+    logger = current_app.logger
     logger.info("WS connected")
 
-    async def _send_received_msgs(topic):
-        async for msg in ws_subscribers.subscribe(topic):
-            await websocket.send_text(msg)
+    def _send_received_msgs(topic: str, stop: Event) -> None:
+        try:
+            for msg in ws_subscribers.subscribe(topic, stop=stop):
+                ws.send(msg)
+        except ConnectionClosed:
+            # the socket is gone: the subscription ends with this undeliverable message
+            return
 
     try:
-        data_topic = await websocket.receive_text()
+        data_topic = ws.receive()
         logger.warning("WS MQTT subscription to '%s'", data_topic)
 
-        await websocket.send_text(f"You subscribed to: {data_topic}")
+        ws.send(f"You subscribed to: {data_topic}")
         while True:
-            # in separate task, listen to received MQTT messages
-            task_push_msg = asyncio.create_task(
-                _send_received_msgs(data_topic),
-            )
-            # while waiting for new WS socket for new MQTT subscription
-            data_topic = await websocket.receive_text()
-            task_push_msg.cancel()
+            # in a separate thread, push the received MQTT messages to the client
+            stop_event = Event()
+            Thread(
+                target=_send_received_msgs,
+                args=(data_topic, stop_event),
+                daemon=True,
+            ).start()
+            # while waiting on the WS socket for a new MQTT subscription
+            data_topic = ws.receive()
+            stop_event.set()
             logger.warning("WS MQTT subscription change to '%s'", data_topic)
-            await websocket.send_text(f"You subscribed to: {data_topic}")
-    except WebSocketDisconnect:
+            ws.send(f"You subscribed to: {data_topic}")
+    except ConnectionClosed:
+        # As before, the subscriber of a closed socket is not stopped here: its MQTT
+        # subscription stays registered until the next message for it finds the socket
+        # closed.
         logger.info("Closed tab")
